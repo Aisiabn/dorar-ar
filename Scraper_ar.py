@@ -164,21 +164,17 @@ def extract_content(html, fn_start=1):
             fn_counter += 1
 
     # ── إصلاح تقطيع الفقرات ──
-    # <br> → مسافة لمنع انكسار السطر في منتصف الفقرة
     for br in block.find_all("br"):
         br.replace_with(" ")
 
-    # استخراج كل <p> كوحدة كاملة
-    paras = block.find_all("p")
-    if paras:
-        raw = "\n\n".join(
-            re.sub(r' {2,}', ' ', p.get_text(separator=" ", strip=True))
-            for p in paras if p.get_text(strip=True)
-        )
-    else:
-        raw = re.sub(r' {2,}', ' ', block.get_text(separator=" ", strip=True))
+    for p in block.find_all("p"):
+        p.insert_before("\n\n")
+        p.insert_after("\n\n")
 
-    # الحواشي الإنترلاينية [1] يُنظَر: ...
+    raw = block.get_text(separator="", strip=False)
+    raw = re.sub(r'[ \t]+', ' ', raw)
+
+    # الحواشي الإنترلاينية
     inline = re.compile(
         r'\[(\d+)\]\s*(يُنظَر[^\n]*|انظر[^\n]*|\(\([^)]+\)\)[^\n]*)',
         re.UNICODE
@@ -296,10 +292,12 @@ if __name__ == "__main__":
                 results += crawl(session, entry["url"], entry["title"],
                                  level=2, visited=visited, fn_counter=fn_counter)
 
-            save_markdown(results, b["title"])   # ← تصحيح: كان None
+            save_markdown(results, b["title"])
 
         print("\nAll done!")
 
     except Exception:
         print("=== ERROR ===")
         traceback.print_exc()
+
+  
