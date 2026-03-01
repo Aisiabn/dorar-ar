@@ -121,8 +121,10 @@ def extract_content(html, fn_start=1):
         for tag in soup.find_all(True, class_=pattern):
             tag.decompose()
 
-    for tag in soup.find_all("div", id=re.compile(r"^collapse")):
-        tag.decompose()
+    # ✅ إصلاح ①: حُذف سطرا decompose لـ collapse divs
+    # كانت تحذف العناوين الجانبية الوسيطة المخزنة داخل accordion
+    # for tag in soup.find_all("div", id=re.compile(r"^collapse")):
+    #     tag.decompose()
 
     block = None
     card  = soup.find("div", class_="card-body")
@@ -163,16 +165,20 @@ def extract_content(html, fn_start=1):
             fn_tag.replace_with(f" [^{fn_counter}] ")
             fn_counter += 1
 
-    # ── إصلاح تقطيع الفقرات ──
+    # ✅ إصلاح ②: <br> → سطر جديد بدلاً من مسافة
     for br in block.find_all("br"):
-        br.replace_with(" ")
+        br.replace_with("\n")
 
     for p in block.find_all("p"):
         p.insert_before("\n\n")
         p.insert_after("\n\n")
 
-    raw = block.get_text(separator="", strip=False)
+    # ✅ إصلاح ②: separator="\n" يفصل عناصر Block بشكل صحيح
+    raw = block.get_text(separator="\n", strip=False)
     raw = re.sub(r'[ \t]+', ' ', raw)
+    # دمج كسرات الأسطر الناتجة عن inline elements (span عادية وما شابه)
+    raw = re.sub(r'(?<!\n)\n(?![\n#>﴿«\[])', ' ', raw)
+    raw = re.sub(r'\n{3,}', '\n\n', raw)
 
     # الحواشي الإنترلاينية
     inline = re.compile(
