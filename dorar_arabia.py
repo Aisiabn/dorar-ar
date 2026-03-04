@@ -70,6 +70,30 @@ def get_tip_text(tip):
     return re.sub(r'\s+', ' ', tip.get_text(strip=True)).strip()
 
 
+def fix_multiline_footnotes(text):
+    """دمج كل حاشية متعددة الأسطر في سطر واحد"""
+    lines  = text.splitlines()
+    result = []
+    fn_def = re.compile(r'^\[\^\d+\]:')
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if fn_def.match(line):
+            parts = [line.rstrip()]
+            i += 1
+            while i < len(lines):
+                nxt = lines[i]
+                if nxt == '' or fn_def.match(nxt):
+                    break
+                parts.append(nxt.strip())
+                i += 1
+            result.append(' '.join(p for p in parts if p))
+        else:
+            result.append(line)
+            i += 1
+    return '\n'.join(result)
+
+
 # ══════════════════════════════════════════════
 # روابط
 # ══════════════════════════════════════════════
@@ -286,8 +310,9 @@ def save_markdown(results, branch_title):
         for fn in all_footnotes:
             lines.append(f"{fn}\n")
 
+    content = fix_multiline_footnotes("".join(lines))
     with open(filepath, "w", encoding="utf-8") as f:
-        f.writelines(lines)
+        f.write(content)
 
     total_chars = sum(len(r.get("text", "")) for r in results)
     print(f"  → Saved: {filepath} | {len(results)} pages | "
