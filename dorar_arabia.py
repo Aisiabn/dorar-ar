@@ -12,6 +12,14 @@ MAIN_PAGE = "https://dorar.net/arabia/5197"
 DELAY     = 1.0
 OUT_DIR   = "dorar_arabia_output"
 
+# عدد عناصر breadcrumb الثابتة قبل بداية الهرمية الفعلية
+# مثال: الرئيسية > موسوعة اللغة العربية  ← 2 عناصر ثابتة → level يبدأ من 1 بعدهما
+BC_BASE = 2
+
+
+# ══════════════════════════════════════════════
+# Session
+# ══════════════════════════════════════════════
 
 def make_session():
     s = requests.Session()
@@ -40,11 +48,33 @@ def get_page(session, url, referer=INDEX):
 
 
 # ══════════════════════════════════════════════
-# الإصلاح: استخراج نص الحاشية مع الحفاظ على أقواس الآيات
+# Breadcrumb → level
+# ══════════════════════════════════════════════
+
+def get_breadcrumb_level(soup):
+    """
+    يستخرج مستوى العنوان من ol.breadcrumb.
+
+    مثال breadcrumb:
+      الرئيسية > موسوعة اللغة العربية > علم النحو > الباب الأول > الفصل الأول
+      ──────────────────── BC_BASE=2 ───────────── | ─── level 1 ─── | ─ level 2 ─ | level 3
+
+    الناتج = عدد العناصر - BC_BASE، بحد أدنى 1.
+    Fallback: 2 (مستوى افتراضي للفروع الرئيسية)
+    """
+    bc = soup.find("ol", class_="breadcrumb")
+    if not bc:
+        return 2
+    items = [li.get_text(strip=True) for li in bc.find_all("li") if li.get_text(strip=True)]
+    level = max(len(items) - BC_BASE, 1)
+    return level
+
+
+# ══════════════════════════════════════════════
+# مساعد الحواشي
 # ══════════════════════════════════════════════
 
 def convert_inner_soup(soup_tag):
-    """تحويل العناصر الداخلية في كائن BeautifulSoup"""
     for inner in soup_tag.find_all("span", class_="aaya"):
         inner.replace_with(f"﴿{inner.get_text(strip=True)}﴾")
     for inner in soup_tag.find_all("span", class_="hadith"):
@@ -54,24 +84,19 @@ def convert_inner_soup(soup_tag):
         if t:
             inner.replace_with(f" {t} ")
 
+
 def get_tip_text(tip):
-    """
-    استخراج نص الحاشية مع الحفاظ على أقواس الآيات.
-    الـ attribute قد يحتوي على HTML — نُحلّله قبل استخراج النص.
-    """
     for attr in ("data-original-title", "title", "data-content", "data-tippy-content"):
         val = tip.get(attr, "").strip()
         if val:
             inner_soup = BeautifulSoup(val, "html.parser")
             convert_inner_soup(inner_soup)
             return re.sub(r'\s+', ' ', inner_soup.get_text()).strip()
-    # fallback: استخرج من DOM مباشرة
     convert_inner_soup(tip)
     return re.sub(r'\s+', ' ', tip.get_text(strip=True)).strip()
 
 
 def fix_multiline_footnotes(text):
-    """دمج كل حاشية متعددة الأسطر في سطر واحد"""
     lines  = text.splitlines()
     result = []
     fn_def = re.compile(r'^\[\^\d+\]:')
@@ -98,8 +123,8 @@ def fix_multiline_footnotes(text):
 # روابط
 # ══════════════════════════════════════════════
 
-def get_pane_links(html, base_num=None):
-    soup  = BeautifulSoup(html, "html.parser")
+def get_pane_links(soup, base_num=None):
+    """يستخرج روابط القائمة الجانبية من الـ tab-pane الـ active."""
     panes = soup.find_all("div", class_="tab-pane")
     links = []
     seen  = set()
@@ -160,12 +185,15 @@ def get_all_branches(html):
 
 
 # ══════════════════════════════════════════════
-# استخراج المحتوى
+# استخراج المحتوى — يقبل soup جاهزة
 # ══════════════════════════════════════════════
 
-def extract_content(html, fn_start=1):
-    soup = BeautifulSoup(html, "html.parser")
-
+def extract_content(soup, fn_start=1):
+    """
+    يستخرج المحتوى من soup جاهزة (بدل إعادة parse).
+    يعيد: {"text": str, "footnotes": list, "fn_next": int}
+    """
+    # تنظيف العناصر غير المرغوبة
     for tag in soup.find_all(["nav", "header", "footer", "script", "style", "form"]):
         tag.decompose()
     for pattern in [
@@ -180,6 +208,7 @@ def extract_content(html, fn_start=1):
         for tag in soup.find_all(True, class_=pattern):
             tag.decompose()
 
+    # تحديد الـ block الرئيسي
     block = None
     card  = soup.find("div", class_="card-body")
     if card:
@@ -205,23 +234,17 @@ def extract_content(html, fn_start=1):
         for h in block.find_all(f"h{i}"):
             h.replace_with(f"\n{'#' * (i + 2)} {h.get_text(strip=True)}\n")
 
-    # ── استخراج الحواشي مع الحفاظ على أقواس الآيات ──
+    # استخراج الحواشي
     footnotes  = []
     fn_counter = fn_start
     for fn_tag in block.find_all(
             ["span", "div", "sup"],
             class_=re.compile(r"foot|note|hawashi|fn|tip", re.I)):
-        fn_text = get_tip_text(fn_tag)          # ← الإصلاح
+        fn_text = get_tip_text(fn_tag)
         if fn_text:
             footnotes.append(f"[^{fn_counter}]: {fn_text}")
             fn_tag.replace_with(f" [^{fn_counter}] ")
             fn_counter += 1
-
-    for br in block.find_all("br"):
-        br.replace_with("\n")
-    for p in block.find_all("p"):
-        p.insert_before("\n\n")
-        p.insert_after("\n\n")
 
     raw = block.get_text(separator="\n", strip=False)
     raw = re.sub(r'[ \t]+', ' ', raw)
@@ -245,42 +268,52 @@ def extract_content(html, fn_start=1):
 
 
 # ══════════════════════════════════════════════
-# الزحف
+# الزحف — المستوى من breadcrumb
 # ══════════════════════════════════════════════
 
-def crawl(session, url, title, level, visited, referer=MAIN_PAGE, fn_counter=None):
+def crawl(session, url, title, visited, referer=MAIN_PAGE, fn_counter=None):
+    """
+    يزحف تعاودياً.
+    المستوى يُشتق من ol.breadcrumb في كل صفحة — لا يُمرَّر من الخارج.
+    """
     if fn_counter is None:
         fn_counter = [1]
     if url in visited:
         return []
     visited.add(url)
 
-    num  = int(url.split("/")[-1])
-    html = get_page(session, url, referer=referer)
+    num      = int(url.split("/")[-1])
+    html     = get_page(session, url, referer=referer)
     time.sleep(DELAY)
 
     if not html:
-        return [{"url": url, "title": title, "level": level,
-                 "text": "(failed)", "footnotes": []}]
+        return [{"url": url, "title": title, "level": 2,
+                 "text": "(failed)", "footnotes": [], "fn_next": fn_counter[0]}]
 
-    sublinks = get_pane_links(html, base_num=num)
+    # parse مرة واحدة — نستخدمها لكل شيء
+    soup  = BeautifulSoup(html, "html.parser")
+    level = get_breadcrumb_level(soup)
+
+    print(f"  [L{level}] {title}")
+
+    sublinks = get_pane_links(soup, base_num=num)
 
     if sublinks:
         results = [{"url": url, "title": title, "level": level,
                     "text": "", "footnotes": [], "fn_next": fn_counter[0]}]
         for sub in sublinks:
             results += crawl(session, sub["url"], sub["title"],
-                             level + 1, visited, referer=url, fn_counter=fn_counter)
+                             visited, referer=url, fn_counter=fn_counter)
         return results
     else:
-        parsed = extract_content(html, fn_start=fn_counter[0])
+        parsed = extract_content(soup, fn_start=fn_counter[0])
         fn_counter[0] = parsed["fn_next"]
         print(f"    → {len(parsed['text'])} chars | fn up to {fn_counter[0]-1}")
         return [{"url": url, "title": title, "level": level, **parsed}]
 
 
 # ══════════════════════════════════════════════
-# الحفظ
+# الحفظ — ملف فرع واحد
 # ══════════════════════════════════════════════
 
 def save_markdown(results, branch_title):
@@ -289,10 +322,9 @@ def save_markdown(results, branch_title):
 
     lines = [
         f"# {branch_title}\n\n",
-        "> المصدر: موسوعة اللغة العربية - الدرر السنية\n\n",
+        "> المصدر: موسوعة اللغة العربية — الدرر السنية\n\n",
         "---\n\n",
     ]
-
     all_footnotes = []
 
     for r in results:
@@ -321,6 +353,76 @@ def save_markdown(results, branch_title):
 
 
 # ══════════════════════════════════════════════
+# الحفظ — ملف مجمّع للـ EPUB
+# ══════════════════════════════════════════════
+
+def save_combined_markdown(all_branches_results):
+    """
+    يكتب ملفاً واحداً يجمع كل الفروع بترقيم حواشٍ عالمي متسلسل.
+    مناسب لتحويله إلى EPUB بـ Pandoc.
+    """
+    filepath      = os.path.join(OUT_DIR, "موسوعة_اللغة_العربية.md")
+    global_fn     = 1          # عداد عالمي
+    global_fn_map = {}         # (branch_idx, old_fn_num) → new_fn_num
+
+    lines         = [
+        "# موسوعة اللغة العربية\n\n",
+        "> المصدر: الدرر السنية\n\n",
+        "---\n\n",
+    ]
+    all_footnotes = []
+
+    for b_idx, (branch_title, results) in enumerate(all_branches_results):
+        lines.append(f"# {branch_title}\n\n")
+
+        for r in results:
+            hashes = "#" * min(max(r["level"] + 1, 2), 6)  # +1 لأن # الرئيسية مأخوذة
+            lines.append(f"{hashes} {r['title']}\n\n")
+
+            text = r.get("text", "")
+            fns  = r.get("footnotes", [])
+
+            # إعادة ترقيم الحواشي لهذه الصفحة
+            if fns:
+                remap = {}
+                for fn_def in fns:
+                    m = re.match(r'^\[\^(\d+)\]:', fn_def)
+                    if m:
+                        old_n = int(m.group(1))
+                        remap[old_n] = global_fn
+                        new_def = re.sub(r'^\[\^\d+\]:', f'[^{global_fn}]:', fn_def)
+                        all_footnotes.append(new_def)
+                        global_fn += 1
+
+                # إعادة ترقيم الإشارات في النص
+                def replace_ref(m):
+                    old = int(m.group(1))
+                    return f" [^{remap.get(old, old)}] "
+
+                text = re.sub(r'\[\^(\d+)\]', replace_ref, text)
+
+            if text:
+                lines.append(f"{text}\n\n")
+            if r["level"] >= 3:
+                lines.append("---\n\n")
+
+        lines.append("\n\n")
+
+    # كتابة تعريفات الحواشي في النهاية
+    if all_footnotes:
+        lines.append("\n")
+        for fn in all_footnotes:
+            lines.append(f"{fn}\n")
+
+    content = fix_multiline_footnotes("".join(lines))
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(content)
+
+    print(f"\n  → Combined: {filepath} | {len(all_footnotes)} حاشية إجمالية")
+    return filepath
+
+
+# ══════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════
 
@@ -342,26 +444,26 @@ if __name__ == "__main__":
             print(f"  {i}. {b['title']} ({len(b['links'])} top links)")
 
         print()
-        visited = {MAIN_PAGE}
+        visited             = {MAIN_PAGE}
+        all_branches_results = []   # لتجميع الـ EPUB
 
         for b in branches:
             print(f"\n{'='*50}")
             print(f"Branch: {b['title']}")
             print('='*50)
 
-            safe_name = re.sub(r'[^\w\u0600-\u06FF]', '_', b["title"])[:40]
-            filepath  = os.path.join(OUT_DIR, f"{safe_name}.md")
-            if os.path.exists(filepath):
-                print(f"  ← موجود، تخطي: {filepath}")
-                continue
-
             fn_counter = [1]
             results    = []
             for entry in b["links"]:
                 results += crawl(session, entry["url"], entry["title"],
-                                 level=2, visited=visited, fn_counter=fn_counter)
+                                 visited, fn_counter=fn_counter)
 
             save_markdown(results, b["title"])
+            all_branches_results.append((b["title"], results))
+
+        # كتابة الملف المجمّع للـ EPUB
+        if all_branches_results:
+            save_combined_markdown(all_branches_results)
 
         print("\nAll done!")
 
