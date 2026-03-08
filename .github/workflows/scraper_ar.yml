@@ -1,4 +1,4 @@
-name: Scraper AR
+name: Scraper AR EPUB
 
 on:
   workflow_dispatch:
@@ -12,18 +12,22 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install requests beautifulsoup4
+
+      - run: pip install requests beautifulsoup4 ebooklib
+
       - run: python Scraper_ar.py
+
       - name: Commit and push results
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add dorar_arabia_output/
+          git add "موسوعة_اللغة_العربية.epub"
           git diff --cached --quiet || (
-            git commit -m "update: scraped content $(date +'%Y-%m-%d')"
+            git commit -m "update: epub $(date +'%Y-%m-%d')"
             git pull --rebase origin main
             git push
           )
